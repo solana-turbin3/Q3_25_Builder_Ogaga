@@ -24,28 +24,31 @@ const PROGRAM_ERRORS = {
     INVALID_INVITE_CODE: "Invalid invite code",
     REQUEST_NOT_ACTIVE: "Request is not active",
     ALREADY_VOTED: "You have already voted on this request",
-    REQUEST_NOT_APPROVED: "Request not approved",
+    REQUEST_NOT_APPROVED: "Request not approved - only approved requests can be disbursed",
+    REQUEST_REJECTED: "Request has been rejected by the group",
     INSUFFICIENT_FUNDS: "Insufficient funds in treasury",
+    WRONG_CIRCLE: "Request belongs to a different circle",
+    WRONG_TOKEN_OWNER: "Token account does not belong to the requester",
 } as const;
 
 // Test configuration constants
 const TEST_CONFIG = {
     USDC_DECIMALS: 6,
-    SOL_AIRDROP_AMOUNT: 2,
+    SOL_AIRDROP_AMOUNT: 0.1,
     INITIAL_USDC_BALANCE: 500,
     STANDARD_CONTRIBUTION: 100,
     STANDARD_REQUEST: 50,
     SMALL_REQUEST: 25,
     CIRCLE_NAME: "Lagos Circle",
-    INVITE_CODE: "LAGOS123",
-    INVALID_INVITE: "WRONGCODE",
+    INVITE_CODE: `LAGOS${Date.now()}`, // Make unique per test run
+    INVALID_INVITE: `WRONG${Date.now()}`,
     SETUP_DELAY_MS: 2000,
 } as const;
 
 describe("DAOjo Savings Circle Program", () => {
-    const provider = anchor.AnchorProvider.env();
-    anchor.setProvider(provider);
-    const program = anchor.workspace.Capstone as Program<Capstone>;
+  const provider = anchor.AnchorProvider.env();
+  anchor.setProvider(provider);
+  const program = anchor.workspace.Capstone as Program<Capstone>;
 
     // Test participants
     let creator: Keypair;
@@ -69,30 +72,31 @@ describe("DAOjo Savings Circle Program", () => {
     const toUsdcAmount = (amount: number) => new anchor.BN(amount * 10 ** TEST_CONFIG.USDC_DECIMALS);
     const fromUsdcAmount = (amount: bigint) => Number(amount) / (10 ** TEST_CONFIG.USDC_DECIMALS);
 
-    /**
-     * Comprehensive test environment setup
-     * Creates accounts, mints tokens, and derives PDAs needed for testing
-     */
+    // Setup everything we need for testing
     before(async () => {
-        // Arrange: Create test keypairs
+        // Create test accounts
         creator = Keypair.generate();
         member1 = Keypair.generate();
         member2 = Keypair.generate();
         nonMember = Keypair.generate();
 
-        // Arrange: Fund all accounts with SOL for transaction fees
-        const airdropAmount = TEST_CONFIG.SOL_AIRDROP_AMOUNT * LAMPORTS_PER_SOL;
-        await Promise.all([
-            provider.connection.requestAirdrop(creator.publicKey, airdropAmount),
-            provider.connection.requestAirdrop(member1.publicKey, airdropAmount),
-            provider.connection.requestAirdrop(member2.publicKey, airdropAmount),
-            provider.connection.requestAirdrop(nonMember.publicKey, airdropAmount),
-        ]);
+        // Fund accounts with SOL for transaction fees
+        const transferAmount = TEST_CONFIG.SOL_AIRDROP_AMOUNT * LAMPORTS_PER_SOL;
+        const setupTx = new anchor.web3.Transaction();
+        
+        // Add SOL transfers for all test accounts
+        setupTx.instructions = [creator, member1, member2, nonMember].map((account) =>
+            SystemProgram.transfer({
+                fromPubkey: provider.wallet.publicKey,
+                toPubkey: account.publicKey,
+                lamports: transferAmount,
+            })
+        );
+        
+        await provider.sendAndConfirm(setupTx);
+        console.log(`✅ Funded all test accounts with ${TEST_CONFIG.SOL_AIRDROP_AMOUNT} SOL each`);
 
-        // Wait for airdrops to complete
-        await new Promise(resolve => setTimeout(resolve, TEST_CONFIG.SETUP_DELAY_MS));
-
-        // Arrange: Create USDC mint for testing token operations
+        // Create USDC mint for testing
         usdcMint = await createMint(
             provider.connection,
             creator,
@@ -101,7 +105,7 @@ describe("DAOjo Savings Circle Program", () => {
             TEST_CONFIG.USDC_DECIMALS
         );
 
-        // Arrange: Create token accounts for all participants
+        // Create token accounts for everyone
         const tokenAccounts = await Promise.all([
             getOrCreateAssociatedTokenAccount(provider.connection, creator, usdcMint, creator.publicKey),
             getOrCreateAssociatedTokenAccount(provider.connection, creator, usdcMint, member1.publicKey),
@@ -112,7 +116,7 @@ describe("DAOjo Savings Circle Program", () => {
         [creatorUsdcAccount, member1UsdcAccount, member2UsdcAccount, nonMemberUsdcAccount] = 
             tokenAccounts.map(account => account.address);
 
-        // Arrange: Mint initial USDC balances to all participants
+        // Give everyone some USDC to start with
         const initialBalance = TEST_CONFIG.INITIAL_USDC_BALANCE * 10 ** TEST_CONFIG.USDC_DECIMALS;
         await Promise.all([
             mintTo(provider.connection, creator, usdcMint, creatorUsdcAccount, creator, initialBalance),
@@ -121,7 +125,7 @@ describe("DAOjo Savings Circle Program", () => {
             mintTo(provider.connection, creator, usdcMint, nonMemberUsdcAccount, creator, initialBalance),
         ]);
 
-        // Arrange: Derive program-derived addresses (PDAs)
+        // Calculate the PDAs we'll need
         [circlePda] = PublicKey.findProgramAddressSync(
             [Buffer.from("circle"), Buffer.from(TEST_CONFIG.INVITE_CODE)],
             program.programId
@@ -138,17 +142,17 @@ describe("DAOjo Savings Circle Program", () => {
             true
         );
 
-
+        console.log("✅ Test setup complete");
     });
 
     describe("Circle Creation", () => {
         it("should create a savings circle with USDC treasury", async () => {
-            // Arrange: Set up circle parameters
+            // Set up circle parameters
             const expectedName = TEST_CONFIG.CIRCLE_NAME;
             const expectedContribution = toUsdcAmount(TEST_CONFIG.STANDARD_CONTRIBUTION);
             const expectedInviteCode = TEST_CONFIG.INVITE_CODE;
 
-            // Act: Create the savings circle
+            // Create the circle
             await program.methods
                 .createCircle(expectedName, expectedContribution, expectedInviteCode)
                 .accounts({
@@ -164,7 +168,7 @@ describe("DAOjo Savings Circle Program", () => {
                 .signers([creator])
                 .rpc();
 
-            // Assert: Verify circle was created with correct parameters
+            // Check if circle was created correctly
             const circleAccount = await program.account.circleAccount.fetch(circlePda);
             
             expect(circleAccount.name).to.equal(expectedName);
@@ -179,13 +183,13 @@ describe("DAOjo Savings Circle Program", () => {
             const treasuryAccount = await getAccount(provider.connection, treasuryTokenAccount);
             expect(treasuryAccount).to.exist;
 
-
+            console.log("✅ Circle created successfully with treasury!");
         });
     });
 
     describe("Circle Membership", () => {
         it("should allow valid users to join circle with correct invite code", async () => {
-            // Act: Member 1 joins the circle
+            // Member 1 joins the circle
             await program.methods
                 .joinCircle(TEST_CONFIG.INVITE_CODE)
                 .accounts({
@@ -195,7 +199,7 @@ describe("DAOjo Savings Circle Program", () => {
                 .signers([member1])
                 .rpc();
 
-            // Act: Member 2 joins the circle
+            // Member 2 also joins
             await program.methods
                 .joinCircle(TEST_CONFIG.INVITE_CODE)
                 .accounts({
@@ -205,7 +209,7 @@ describe("DAOjo Savings Circle Program", () => {
                 .signers([member2])
                 .rpc();
 
-            // Assert: Verify membership updates
+            // Check if both members were added
             const circleAccount = await program.account.circleAccount.fetch(circlePda);
             
             expect(circleAccount.memberCount).to.equal(3);
@@ -213,17 +217,17 @@ describe("DAOjo Savings Circle Program", () => {
             expect(circleAccount.member2.toBase58()).to.equal(member1.publicKey.toBase58());
             expect(circleAccount.member3.toBase58()).to.equal(member2.publicKey.toBase58());
 
-
+            console.log("✅ Members joined successfully!");
         });
 
         it("should reject joining attempts with invalid invite codes", async () => {
-            // Arrange: Generate PDA with invalid invite code
+            // Try to join with wrong invite code
             const [wrongCirclePda] = PublicKey.findProgramAddressSync(
                 [Buffer.from("circle"), Buffer.from(TEST_CONFIG.INVALID_INVITE)],
                 program.programId
             );
 
-            // Act & Assert: Attempt to join with wrong invite code should fail
+            // This should fail
             try {
                 await program.methods
                     .joinCircle(TEST_CONFIG.INVALID_INVITE)
@@ -250,18 +254,18 @@ describe("DAOjo Savings Circle Program", () => {
                 );
                 
                 expect(hasValidError).to.be.true;
-
+                console.log("✅ Invalid invite code rejected correctly!");
             }
         });
     });
 
     describe("Contributions", () => {
         it("should allow circle members to contribute USDC to treasury", async () => {
-            // Arrange: Record initial treasury balance
+            // Check treasury balance before
             const treasuryBalanceBefore = await getAccount(provider.connection, treasuryTokenAccount);
             const expectedContribution = toUsdcAmount(TEST_CONFIG.STANDARD_CONTRIBUTION);
 
-            // Act: Member contributes to treasury
+            // Member contributes to treasury
             await program.methods
                 .contribute(TEST_CONFIG.INVITE_CODE)
                 .accounts({
@@ -277,16 +281,16 @@ describe("DAOjo Savings Circle Program", () => {
                 .signers([member1])
                 .rpc();
 
-            // Assert: Verify treasury balance increased by contribution amount
+            // Check if treasury balance increased
             const treasuryBalanceAfter = await getAccount(provider.connection, treasuryTokenAccount);
             const actualIncrease = Number(treasuryBalanceAfter.amount - treasuryBalanceBefore.amount);
             
             expect(actualIncrease).to.equal(Number(expectedContribution));
-
+            console.log("✅ Member contribution successful!");
         });
 
         it("should prevent non-members from contributing to treasury", async () => {
-            // Act & Assert: Non-member attempt to contribute should fail
+            // Should fail since nonMember isn't in the circle
             try {
                 await program.methods
                     .contribute(TEST_CONFIG.INVITE_CODE)
@@ -306,7 +310,7 @@ describe("DAOjo Savings Circle Program", () => {
                 expect.fail("Expected non-member contribution to be rejected");
             } catch (error: any) {
                 expect(error.message).to.include(PROGRAM_ERRORS.NOT_A_MEMBER);
-
+                console.log("✅ Non-member contribution rejected correctly!");
             }
         });
     });
@@ -317,17 +321,17 @@ describe("DAOjo Savings Circle Program", () => {
         let fundingRequestPda: PublicKey;
 
         it("should create funding request with proper initialization", async () => {
-            // Arrange: Derive funding request PDA
+            // Get the PDA for this request
             [fundingRequestPda] = PublicKey.findProgramAddressSync(
                 [
                     Buffer.from("request"),
                     circlePda.toBuffer(),
                     member1.publicKey.toBuffer(),
-                ],
-                program.programId
-            );
+      ],
+      program.programId
+    );
 
-            // Act: Create funding request
+            // Create the request
             await program.methods
                 .createRequest(TEST_CONFIG.INVITE_CODE, requestAmount, requestDescription)
                 .accounts({
@@ -339,7 +343,7 @@ describe("DAOjo Savings Circle Program", () => {
                 .signers([member1])
                 .rpc();
 
-            // Assert: Verify request created with correct parameters
+            // Check if request was created correctly
             const requestAccount = await program.account.fundingRequest.fetch(fundingRequestPda);
             
             expect(requestAccount.requester.toBase58()).to.equal(member1.publicKey.toBase58());
@@ -353,11 +357,11 @@ describe("DAOjo Savings Circle Program", () => {
             expect(requestAccount.createdAt.toNumber()).to.be.greaterThan(0);
             expect(requestAccount.bump).to.be.greaterThan(0);
 
-
+            console.log("✅ Funding request created successfully!");
         });
 
         it("should process votes and determine approval through majority consensus", async () => {
-            // Act: Creator votes YES (1st vote)
+            // Creator votes YES
             await program.methods
                 .voteOnRequest(TEST_CONFIG.INVITE_CODE, true)
                 .accounts({
@@ -368,7 +372,7 @@ describe("DAOjo Savings Circle Program", () => {
                 .signers([creator])
                 .rpc();
 
-            // Assert: Verify first vote recorded correctly
+            // Check first vote
             let requestAccount = await program.account.fundingRequest.fetch(fundingRequestPda);
             expect(requestAccount.votesFor).to.equal(1);
             expect(requestAccount.votesAgainst).to.equal(0);
@@ -396,7 +400,7 @@ describe("DAOjo Savings Circle Program", () => {
             expect(requestAccount.voter2.toBase58()).to.equal(member2.publicKey.toBase58());
             expect(requestAccount.status).to.deep.equal({ approved: {} });
 
-
+            console.log("✅ Democratic voting successful! Request approved with majority vote.");
         });
 
         it("should transfer approved funds from treasury to requester", async () => {
@@ -405,9 +409,9 @@ describe("DAOjo Savings Circle Program", () => {
             const treasuryBalanceBefore = await getAccount(provider.connection, treasuryTokenAccount);
 
             // Act: Disburse approved funds
-            await program.methods
+    await program.methods
                 .disburseFunds(TEST_CONFIG.INVITE_CODE)
-                .accounts({
+      .accounts({
                     authority: creator.publicKey,
                     circleAccount: circlePda,
                     fundingRequest: fundingRequestPda,
@@ -434,18 +438,111 @@ describe("DAOjo Savings Circle Program", () => {
             const requestAccount = await program.account.fundingRequest.fetch(fundingRequestPda);
             expect(requestAccount.status).to.deep.equal({ disbursed: {} });
 
+            console.log("✅ Funds disbursed successfully!");
+            console.log("   Request amount:", Number(requestAmount) / 10**6, "USDC");
+            console.log("   Amount disbursed:", requesterIncrease / 10**6, "USDC");
+        });
 
+        it("should reject funding request when majority votes against", async () => {
+            // Arrange: Create a new funding request for rejection test
+            const rejectionRequestAmount = toUsdcAmount(TEST_CONFIG.SMALL_REQUEST);
+            const rejectionDescription = "Emergency fund request - test rejection";
+            
+            const [rejectionRequestPda] = PublicKey.findProgramAddressSync(
+                [
+                    Buffer.from("request"),
+                    circlePda.toBuffer(),
+                    member2.publicKey.toBuffer(),
+                ],
+                program.programId
+            );
+
+            // Act: Member2 creates a funding request  
+            await program.methods
+                .createRequest(TEST_CONFIG.INVITE_CODE, rejectionRequestAmount, rejectionDescription)
+                .accounts({
+                    requester: member2.publicKey,
+                    circleAccount: circlePda,
+                    fundingRequest: rejectionRequestPda,
+                    systemProgram: SystemProgram.programId,
+                } as any)
+                .signers([member2])
+                .rpc();
+
+            // Act: Creator votes NO (1st vote against)
+            await program.methods
+                .voteOnRequest(TEST_CONFIG.INVITE_CODE, false) // false = NO vote
+                .accounts({
+                    voter: creator.publicKey,
+                    circleAccount: circlePda,
+                    fundingRequest: rejectionRequestPda,
+                } as any)
+                .signers([creator])
+                .rpc();
+
+            // Assert: Verify first NO vote recorded
+            let requestAccount = await program.account.fundingRequest.fetch(rejectionRequestPda);
+            expect(requestAccount.votesFor).to.equal(0);
+            expect(requestAccount.votesAgainst).to.equal(1);
+            expect(requestAccount.voterCount).to.equal(1);
+            expect(requestAccount.status).to.deep.equal({ active: {} });
+
+            // Act: Member2 votes NO (2nd vote against - creates majority rejection 2/3)
+            await program.methods
+                .voteOnRequest(TEST_CONFIG.INVITE_CODE, false) // false = NO vote
+                .accounts({
+                    voter: member2.publicKey,
+                    circleAccount: circlePda,
+                    fundingRequest: rejectionRequestPda,
+                } as any)
+                .signers([member2])
+                .rpc();
+
+            // Assert: Verify request was rejected due to majority NO votes
+            requestAccount = await program.account.fundingRequest.fetch(rejectionRequestPda);
+            expect(requestAccount.votesFor).to.equal(0);
+            expect(requestAccount.votesAgainst).to.equal(2);
+            expect(requestAccount.voterCount).to.equal(2);
+            expect(requestAccount.status).to.deep.equal({ rejected: {} });
+
+            // Act & Assert: Attempt to disburse rejected request should fail
+            try {
+                await program.methods
+                    .disburseFunds(TEST_CONFIG.INVITE_CODE)
+                    .accounts({
+                        authority: creator.publicKey,
+                        circleAccount: circlePda,
+                        fundingRequest: rejectionRequestPda,
+                        requesterTokenAccount: member2UsdcAccount,
+                        treasuryTokenAccount: treasuryTokenAccount,
+                        treasuryAuthority: treasuryAuthorityPda,
+                        usdcMint: usdcMint,
+                        tokenProgram: TOKEN_PROGRAM_ID,
+                    } as any)
+                    .signers([creator])
+                    .rpc();
+                
+                // Should not reach here
+                expect.fail("Disbursement should have failed for rejected request");
+            } catch (error: any) {
+                // Now we expect the clean "Request has been rejected by the group" error
+                expect(error.message).to.include(PROGRAM_ERRORS.REQUEST_REJECTED);
+                console.log("✅ Rejected request disbursement correctly blocked!");
+                console.log("   Error: Request has been rejected by the group");
+            }
+
+            console.log("✅ Request rejected by majority vote (2 NO vs 0 YES)");
         });
     });
 
     describe("Edge Cases", () => {
         it("should prevent duplicate voting by same member", async () => {
-            // Arrange: Create new request for double voting test
+            // Arrange: Create new request for double voting test  
             const [doubleVoteRequestPda] = PublicKey.findProgramAddressSync(
                 [
                     Buffer.from("request"),
                     circlePda.toBuffer(),
-                    member2.publicKey.toBuffer(),
+                    creator.publicKey.toBuffer(),
                 ],
                 program.programId
             );
@@ -457,12 +554,12 @@ describe("DAOjo Savings Circle Program", () => {
             await program.methods
                 .createRequest(TEST_CONFIG.INVITE_CODE, testRequestAmount, testDescription)
                 .accounts({
-                    requester: member2.publicKey,
+                    requester: creator.publicKey,
                     circleAccount: circlePda,
                     fundingRequest: doubleVoteRequestPda,
                     systemProgram: SystemProgram.programId,
                 } as any)
-                .signers([member2])
+                .signers([creator])
                 .rpc();
 
             // Act: Creator votes once (should succeed)
@@ -491,7 +588,7 @@ describe("DAOjo Savings Circle Program", () => {
                 expect.fail("Expected double voting attempt to be rejected");
             } catch (error: any) {
                 expect(error.message).to.include(PROGRAM_ERRORS.ALREADY_VOTED);
-
+                console.log("✅ Double voting prevented correctly!");
             }
 
             // Assert: Verify vote count remains unchanged after failed duplicate attempt
@@ -500,4 +597,6 @@ describe("DAOjo Savings Circle Program", () => {
             expect(requestAccount.voterCount).to.equal(1);
         });
     });
+
+   
 });
