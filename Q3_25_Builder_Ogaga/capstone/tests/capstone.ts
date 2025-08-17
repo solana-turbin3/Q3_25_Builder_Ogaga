@@ -24,8 +24,11 @@ const PROGRAM_ERRORS = {
     INVALID_INVITE_CODE: "Invalid invite code",
     REQUEST_NOT_ACTIVE: "Request is not active",
     ALREADY_VOTED: "You have already voted on this request",
-    REQUEST_NOT_APPROVED: "Request not approved",
+    REQUEST_NOT_APPROVED: "Request not approved - only approved requests can be disbursed",
+    REQUEST_REJECTED: "Request has been rejected by the group",
     INSUFFICIENT_FUNDS: "Insufficient funds in treasury",
+    WRONG_CIRCLE: "Request belongs to a different circle",
+    WRONG_TOKEN_OWNER: "Token account does not belong to the requester",
 } as const;
 
 // Test configuration constants
@@ -521,15 +524,11 @@ describe("DAOjo Savings Circle Program", () => {
                 
                 // Should not reach here
                 expect.fail("Disbursement should have failed for rejected request");
-            } catch (error) {
-                // Could be "Request not approved" or account constraint error for rejected requests
-                const errorString = error.toString();
-                const hasCorrectError = errorString.includes("Request not approved") || 
-                                       errorString.includes("ConstraintSeeds") ||
-                                       errorString.includes("constraint was violated");
-                expect(hasCorrectError).to.be.true;
+            } catch (error: any) {
+                // Now we expect the clean "Request has been rejected by the group" error
+                expect(error.message).to.include(PROGRAM_ERRORS.REQUEST_REJECTED);
                 console.log("✅ Rejected request disbursement correctly blocked!");
-                console.log("   Error:", errorString.substring(0, 100) + "...");
+                console.log("   Error: Request has been rejected by the group");
             }
 
             console.log("✅ Request rejected by majority vote (2 NO vs 0 YES)");

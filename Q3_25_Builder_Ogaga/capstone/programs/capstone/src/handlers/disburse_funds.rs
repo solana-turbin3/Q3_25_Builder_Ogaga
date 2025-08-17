@@ -7,17 +7,39 @@ use crate::state::*;
 use crate::error::*;
 
 pub fn disburse_funds(context: Context<DisburseFundsAccountConstraints>, invite_code: String) -> Result<()> {
-    let _request = &context.accounts.funding_request;
+    let request = &context.accounts.funding_request;
     
-    // Verify request is approved
+    // Verify request belongs to this circle
     require!(
-        context.accounts.funding_request.status == RequestStatus::Approved,
-        CustomError::RequestNotApproved
+        request.circle == context.accounts.circle_account.key(),
+        CustomError::WrongCircle
     );
+    
+    // Verify token account belongs to requester
+    require!(
+        context.accounts.requester_token_account.owner == request.requester,
+        CustomError::WrongTokenOwner
+    );
+    
+    // Check request status with specific error messages
+    match request.status {
+        RequestStatus::Approved => {
+            // Continue with disbursement
+        },
+        RequestStatus::Rejected => {
+            return Err(CustomError::RequestRejected.into());
+        },
+        RequestStatus::Disbursed => {
+            return Err(CustomError::RequestNotApproved.into()); // Already disbursed
+        },
+        RequestStatus::Active => {
+            return Err(CustomError::RequestNotApproved.into()); // Still being voted on
+        }
+    }
 
     // Check treasury has sufficient funds
     let treasury_balance = context.accounts.treasury_token_account.amount;
-    let request_amount = context.accounts.funding_request.amount;
+    let request_amount = request.amount;
     require!(
         treasury_balance >= request_amount,
         CustomError::InsufficientFunds
@@ -65,20 +87,10 @@ pub struct DisburseFundsAccountConstraints<'info> {
     )]
     pub circle_account: Account<'info, CircleAccount>,
 
-    #[account(
-        mut,
-
-        constraint = funding_request.circle == circle_account.key(),
-
-        constraint = funding_request.status == RequestStatus::Approved
-    )]
+    #[account(mut)]
     pub funding_request: Account<'info, FundingRequest>,
 
-    #[account(
-        mut,
-
-        constraint = requester_token_account.owner == funding_request.requester
-    )]
+    #[account(mut)]
     pub requester_token_account: InterfaceAccount<'info, TokenAccount>,
 
     #[account(

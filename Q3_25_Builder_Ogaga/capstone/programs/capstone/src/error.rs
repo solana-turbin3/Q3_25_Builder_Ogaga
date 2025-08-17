@@ -12,12 +12,18 @@ pub enum CustomError {
     RequestNotActive,
     #[msg("You have already voted on this request")]
     AlreadyVoted,
-    #[msg("Request not approved")]
+    #[msg("Request not approved - only approved requests can be disbursed")]
     RequestNotApproved,
     #[msg("Insufficient funds in treasury")]
     InsufficientFunds,
     #[msg("Only the requester can create requests")]
     OnlyRequesterCanCreate,
+    #[msg("Request has been rejected by the group")]
+    RequestRejected,
+    #[msg("Request belongs to a different circle")]
+    WrongCircle,
+    #[msg("Token account does not belong to the requester")]
+    WrongTokenOwner,
 }
 
 

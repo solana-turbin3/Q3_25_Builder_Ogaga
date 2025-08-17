@@ -45,7 +45,7 @@ The whole thing is pretty straightforward:
 - Treasury is controlled by program, not individuals
 - All vote counts and balances are transparent on-chain
 
-## Running This Thing
+## Running this
 
 You'll need the usual Solana dev setup - Rust, Anchor CLI, Node.js, etc. Nothing fancy.
 
