@@ -1,0 +1,5 @@
+{
+  "rust-analyzer.linkedProjects": [
+    "anchor_vault/programs/anchor_vault/Cargo.toml"
+  ]
+}
