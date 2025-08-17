@@ -138,7 +138,7 @@ describe("DAOjo Savings Circle Program", () => {
             true
         );
 
-        console.log("✅ Test setup complete");
+
     });
 
     describe("Circle Creation", () => {
@@ -179,7 +179,7 @@ describe("DAOjo Savings Circle Program", () => {
             const treasuryAccount = await getAccount(provider.connection, treasuryTokenAccount);
             expect(treasuryAccount).to.exist;
 
-            console.log("✅ Circle created successfully with treasury!");
+
         });
     });
 
@@ -213,7 +213,7 @@ describe("DAOjo Savings Circle Program", () => {
             expect(circleAccount.member2.toBase58()).to.equal(member1.publicKey.toBase58());
             expect(circleAccount.member3.toBase58()).to.equal(member2.publicKey.toBase58());
 
-            console.log("✅ Members joined successfully!");
+
         });
 
         it("should reject joining attempts with invalid invite codes", async () => {
@@ -250,7 +250,7 @@ describe("DAOjo Savings Circle Program", () => {
                 );
                 
                 expect(hasValidError).to.be.true;
-                console.log("✅ Invalid invite code rejected correctly!");
+
             }
         });
     });
@@ -282,7 +282,7 @@ describe("DAOjo Savings Circle Program", () => {
             const actualIncrease = Number(treasuryBalanceAfter.amount - treasuryBalanceBefore.amount);
             
             expect(actualIncrease).to.equal(Number(expectedContribution));
-            console.log("✅ Member contribution successful!");
+
         });
 
         it("should prevent non-members from contributing to treasury", async () => {
@@ -306,7 +306,7 @@ describe("DAOjo Savings Circle Program", () => {
                 expect.fail("Expected non-member contribution to be rejected");
             } catch (error: any) {
                 expect(error.message).to.include(PROGRAM_ERRORS.NOT_A_MEMBER);
-                console.log("✅ Non-member contribution rejected correctly!");
+
             }
         });
     });
@@ -353,7 +353,7 @@ describe("DAOjo Savings Circle Program", () => {
             expect(requestAccount.createdAt.toNumber()).to.be.greaterThan(0);
             expect(requestAccount.bump).to.be.greaterThan(0);
 
-            console.log("✅ Funding request created successfully!");
+
         });
 
         it("should process votes and determine approval through majority consensus", async () => {
@@ -396,7 +396,7 @@ describe("DAOjo Savings Circle Program", () => {
             expect(requestAccount.voter2.toBase58()).to.equal(member2.publicKey.toBase58());
             expect(requestAccount.status).to.deep.equal({ approved: {} });
 
-            console.log("✅ Democratic voting successful! Request approved with majority vote.");
+
         });
 
         it("should transfer approved funds from treasury to requester", async () => {
@@ -434,9 +434,7 @@ describe("DAOjo Savings Circle Program", () => {
             const requestAccount = await program.account.fundingRequest.fetch(fundingRequestPda);
             expect(requestAccount.status).to.deep.equal({ disbursed: {} });
 
-            console.log("✅ Funds disbursed successfully!");
-            console.log("   Request amount:", Number(requestAmount) / 10**6, "USDC");
-            console.log("   Amount disbursed:", requesterIncrease / 10**6, "USDC");
+
         });
     });
 
@@ -493,7 +491,7 @@ describe("DAOjo Savings Circle Program", () => {
                 expect.fail("Expected double voting attempt to be rejected");
             } catch (error: any) {
                 expect(error.message).to.include(PROGRAM_ERRORS.ALREADY_VOTED);
-                console.log("✅ Double voting prevented correctly!");
+
             }
 
             // Assert: Verify vote count remains unchanged after failed duplicate attempt
@@ -502,15 +500,4 @@ describe("DAOjo Savings Circle Program", () => {
             expect(requestAccount.voterCount).to.equal(1);
         });
     });
-
-    after(() => {
-        console.log("\n🎉 All DAOjo tests completed successfully!");
-        console.log("✅ Circle creation with USDC treasury");
-        console.log("✅ Member management with invite codes");
-        console.log("✅ USDC contributions to shared treasury");
-        console.log("✅ Democratic funding request system");
-        console.log("✅ Automatic fund disbursement");
-        console.log("✅ Comprehensive error handling");
-        
-  });
 });
